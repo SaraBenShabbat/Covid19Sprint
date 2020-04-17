@@ -68,5 +68,6 @@ def lambda_handler(event, context):
             'result': 'Ok',
             'data': base64.b64encode(payload)
         }
-        output.append(output_record)   
+        output.append(output_record)  
         return {'records': output}
+        
