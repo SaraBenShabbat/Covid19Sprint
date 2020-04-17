@@ -76,7 +76,7 @@ def get_prev_score(patient_id: str):
     if (my_list == []):
         return None
 
-    data_sorted = sorted(my_list, key=lambda item: item['Timestamp'])
+    data_sorted = sorted(my_list, key=lambda item: int(item['Timestamp']))
 
     return data_sorted[len(data_sorted) - 1]['Score']['Total']
 
@@ -209,7 +209,7 @@ def main_func():
                 else:
                     score_per_measure = 1
             else:
-                score_per_measure = 3 
+                score_per_measure = 3
             measure_dict['AgeScore'] = score_per_measure
             total_score = total_score + score_per_measure
 
@@ -237,7 +237,9 @@ def main_func():
             score_per_measure = measure_dict['RespiratoryFindings'] = 0 if primary_measure['wheezing'] == False else 2
             total_score = total_score + score_per_measure
 
-        measure_dict['Total'] = np.int(total_score.item())
+        if(type(total_score) is not int):
+            total_score = np.int(total_score.item())
+        measure_dict['Total'] = total_score
         score_record['Score'] = measure_dict
 
         # Get previous score for the current patient, and if necessary - issue an appropriate message. (- It should work fine.)
@@ -245,7 +247,7 @@ def main_func():
         if(prev_score != None):
               score_alert(prev_score, score_record)
 
-        # Writing the document to ES - Why doesn't it work ???
+        # Writing the document to ES.
         es.index(index='patient_status', id=score_record['Id'], body=score_record)
 
 
