@@ -18,34 +18,34 @@ es.ping()
 elasticache_endpoint = "cv19redis-001.d9jy7a.0001.euw1.cache.amazonaws.com"
 r = redis.StrictRedis(host=elasticache_endpoint, port=6379, db=0)
 
-# Nano seconds from epoch. (- same format is used in kinesis.)
+# Nano seconds from epoch. (- same format is used in the kinesis.)
 ns_epoch = time.time_ns() // 1000000
 
 # Create df's that represent the measure values and severity.
 df_breath = pd.DataFrame({'min': {0: 0, 1: 9, 2: 12, 3: 21, 4: 25},
-                          'max': {0: 8.9, 1: 11.9, 2: 20.9, 3: 24.9, 4: 35},
+                          'max': {0: 8.99, 1: 11.99, 2: 20.99, 3: 24.99, 4: 35},
                           'severity': {0: 3, 1: 1, 2: 0, 3: 2, 4: 3}, })
 df_pso2 = pd.DataFrame({'min': {0: 0, 1: 92, 2: 94, 3: 96},
-                        'max': {0: 91.9, 1: 93.9, 2: 95.9, 3: 100},
+                        'max': {0: 91.99, 1: 93.99, 2: 95.99, 3: 100},
                         'severity': {0: 3, 1: 2, 2: 1, 3: 0}, })
 df_BPM = pd.DataFrame({'min': {0: 0, 1: 41, 2: 51, 3: 91, 4: 111, 5: 131},
-                       'max': {0: 40.9, 1: 50.9, 2: 90.9, 3: 110.9, 4: 130.9, 5: 200},
+                       'max': {0: 40.99, 1: 50.99, 2: 90.99, 3: 110.99, 4: 130.99, 5: 200},
                        'severity': {0: 3, 1: 1, 2: 0, 3: 1, 4: 2, 5: 3}, })
 df_BloodPressure = pd.DataFrame({'min': {0: 0, 1: 91, 2: 101, 3: 111, 4: 220},
-                                 'max': {0: 90.9, 1: 100.9, 2: 110.9, 3: 219.9, 4: 300},
+                                 'max': {0: 90.99, 1: 100.99, 2: 110.99, 3: 219.99, 4: 300},
                                  'severity': {0: 3, 1: 2, 2: 1, 3: 0, 4: 3}, })
 df_fever = pd.DataFrame({'min': {0: 0, 1: 35.1, 2: 36.1, 3: 37.8, 4: 38.1, 5: 39.1},
-                         'max': {0: 35, 1: 36, 2: 37.7, 3: 38, 4: 39, 5: 45},
+                         'max': {0: 35.09, 1: 36.09, 2: 37.79, 3: 38.09, 4: 39.09, 5: 45},
                          'severity': {0: 3, 1: 1, 2: 0, 3: 1, 4: 2, 5: 3}, })
 
-df_breath_high_fever = pd.DataFrame({'min': {0: 0, 1: 7.7, 2: 10.2, 3: 17.8, 4: 20.5},
-                                     'max': {0: 7.6, 1: 10.1, 2: 17.7, 3: 20.4, 4: 35},
+df_breath_high_fever = pd.DataFrame({'min': {0: 0, 1: 6.9, 2: 9.4, 3: 18, 4: 21.3},
+                                     'max': {0: 6.89, 1: 9.35, 2: 17.99, 3: 21.29, 4: 35},
                                      'severity': {0: 3, 1: 1, 2: 0, 3: 2, 4: 3}, })
-df_BPM_high_fever = pd.DataFrame({'min': {0: 0, 1: 35, 2: 43.3, 3: 77.3, 4: 94.3, 5: 111.3},
-                                  'max': {0: 34.9, 1: 43.2, 2: 77.2, 3: 94.2, 4: 111.2, 5: 200},
+df_BPM_high_fever = pd.DataFrame({'min': {0: 0, 1: 35, 2: 43.6, 3: 76.6, 4: 94, 5: 110.6},
+                                  'max': {0: 34.99, 1: 42.59, 2: 76.59, 3: 93.59, 4: 110.59, 5: 200},
                                   'severity': {0: 3, 1: 1, 2: 0, 3: 1, 4: 2, 5: 3}, })
-df_BloodPressure_high_fever = pd.DataFrame({'min': {0: 0, 1: 77.3, 2: 85.8, 3: 34.4, 4: 187},
-                                            'max': {0: 77.2, 1: 85.7, 2: 94.3, 3: 186.9, 4: 300},
+df_BloodPressure_high_fever = pd.DataFrame({'min': {0: 0, 1: 76.6, 2: 85.6, 3: 93.6, 4: 186.2},
+                                            'max': {0: 76.59, 1: 85.99, 2: 93.5, 3: 186.19, 4: 300},
                                             'severity': {0: 3, 1: 2, 2: 1, 3: 0, 4: 3}, })
 
 df_names = [df_breath, df_pso2, df_BloodPressure, df_BPM, df_fever]
@@ -85,19 +85,27 @@ def score_alert(prev_score, score_record, cnt):
 
 
 def get_prev_score(patient_id: str):
-    my_list = []
-    res = es.search(index='patient_status', size=10000)
+    minus_hours = int(ns_epoch) - 38000000
+    search_body = {
+        'size': 10000,
+        '_source': ['Timestamp', 'Score'],
+        'query': {
+            'bool': {
+                'must': [
+                    {'match': {'PatientID': patient_id}},
+                    {'range': {'Timestamp': {"gte": minus_hours}}}
+                ]
+            }
+        }
+    }
+    my_list = es.search(index="patient_status", body=search_body)['hits']['hits']
 
-    for item in res['hits']['hits']:
-        if (item['_source']['PatientID'] == patient_id):
-            my_list.append(item['_source'])
-
-    # Check if the current patient - has no prev records.
+    # Check if the current patient - has no previous records.
     if (my_list == []):
         return None
 
-    data_sorted = sorted(my_list, key=lambda item: int(item['Timestamp']))
-    return data_sorted[len(data_sorted) - 1]['Score']['Total']
+    data_sorted = sorted(my_list, key=lambda item: int(item['_source']['Timestamp']))
+    return data_sorted[len(data_sorted) - 1]['_source']['Score']['Total']
 
 
 def scoring_measure(df_in_use, priority_names, i):
@@ -161,7 +169,7 @@ def get_expired_status(measure_datetime) -> bool:
 def check_expired():
     measure_check = measure_names + ['wheezing']
 
-    # Counter for patients with a 'patinet_event' record for expired measure. (- as this and also scoring status have to use the same id.)
+    # Counter for patients having a record in 'patinet_event', for expired measure. (- This record and also scoring status have to use the same id. if so, in score_alert - modifying the id.)
     cnt = 0
 
     last_update_records = r.hvals('last_update')
@@ -175,10 +183,10 @@ def check_expired():
         all_expired_measures = ''
         # Iterate over all measures I need to check the receiving data about them.
         for measure in measure_check:
-            # Checks whether the measure has ever been measured for the current patient
+            # Checks whether the measure has ever been measured for the current patient.
             if(measure in record['updates']):
-            # Check if the measure hasn't been remove from 'LastKnown' redis index (- every measure in its appropiate location in the dict.)
-            # If yes, Check if the measure has been expired. If yes, update about an expired measure.
+            # Check if the measure hasn't been remove from 'LastKnown' redis index (- every measure in its appropiate location in the dictionary.)
+            # If no, Check if the measure has been expired. If yes, update about an expired measure.
                 if (measure == 'breath_rate' or measure == 'wheezing'):
                     if(measure in  last_known['primery_priority']):
                         if(get_expired_status(record['updates'][measure]) == True):
@@ -263,7 +271,7 @@ def main_func():
               score_alert(prev_score, score_record, cnt)
 
         # Writing the document to ES.
-        res = es.index(index='patient_status', id=score_record['Id'], body=score_record)
+        es.index(index='patient_status', id=score_record['Id'], body=score_record)
 
         cnt = cnt + 1
 
