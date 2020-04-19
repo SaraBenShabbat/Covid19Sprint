@@ -18,7 +18,7 @@ es.ping()
 elasticache_endpoint = "cv19redis-001.d9jy7a.0001.euw1.cache.amazonaws.com"
 r = redis.StrictRedis(host=elasticache_endpoint, port=6379, db=0)
 
-# Nano seconds from epoch. (- same format is used in the kinesis.)
+# Nano seconds since epoch. (- same format is used in the kinesis.)
 ns_epoch = time.time_ns() // 1000000
 
 # Create df's that represent the measure values and severity.
@@ -85,7 +85,7 @@ def score_alert(prev_score, score_record, cnt):
 
 
 def get_prev_score(patient_id: str):
-    minus_hours = int(ns_epoch) - 38000000
+    minus_hours = int(ns_epoch) - 43200000
     search_body = {
         'size': 10000,
         '_source': ['Timestamp', 'Score'],

@@ -73,8 +73,10 @@ def lambda_handler(event, context):
 
             primery_priority = dt['primery_priority']
             secondery_priority = dt['secondery_priority']
-
+            
+            # Nano seconds since epoch. this timestamp is used only in LastKnown & last_update. also - calc and ui use the same format when they retrieve this data.
             ns_epoch = int(time.time_ns() // 1000000)
+            #ns_epoch = 1
             
             # Update exist measures - both values and timestamp.
             current_known['timeTag'] = ns_epoch
