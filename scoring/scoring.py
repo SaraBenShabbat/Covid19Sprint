@@ -56,7 +56,6 @@ expired_event = [False] * len(r.hvals('last_update'))
 
 
 
-
 def score_alert(prev_score, score_record, cnt):
     current_score = score_record['Score']['Total']
     desc = ''
