@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import redis
-import ast
+import json
 from elasticsearch import Elasticsearch
 import time
 import pandas as pd
@@ -53,6 +53,7 @@ df_names_low = [df_breath_high_fever, df_pso2, df_BloodPressure_high_fever, df_B
 measure_names = ['breath_rate', 'saturation', 'blood_pressure_h', 'bpm', 'fever']
 score_record_names = ['BreathRate', 'SpO2', 'BloodPressure', 'BPM', 'Fever']
 expired_event = [False] * len(r.hvals('last_update'))
+
 
 
 
@@ -120,7 +121,7 @@ def initial_vars():
 
 
 def get_desired_data(record):
-    record = ast.literal_eval(record.decode('ascii'))
+    record = json.loads(record)
     general_measure = record
     primary_measure = record['primery_priority']
     secondary_measure = record['secondery_priority']
@@ -146,12 +147,12 @@ def expired_alert(id: str, patient_id:str, all_expired_measures: str):
 def update_expired_measure(patient_id: str, measure: str)-> str:
     # Removing the expired measure from 'LastKnown' index.
     current_patient = r.hget('LastKnown', patient_id)
-    current_patient = ast.literal_eval(current_patient.decode('ascii'))
+    current_patient = json.loads(current_patient)
     if(measure == 'breath_rate' or measure =='wheezing'):
         current_patient['primery_priority'].pop(measure)
     else:
         current_patient['secondery_priority'].pop(measure)
-    r.hset('LastKnown', patient_id, str(current_patient))
+    r.hset('LastKnown', patient_id, json.dumps(current_patient))
 
     return measure + ', '
 
@@ -174,10 +175,9 @@ def check_expired():
     last_update_records = r.hvals('last_update')
     for record in last_update_records:
         # Get the records belong to the current patient_id from 'last_update' and 'LastKnown' redis indexes.
-        record = ast.literal_eval(record.decode('ascii'))
-        record = ast.literal_eval(r.hget('last_update', record['patientId']).decode('ascii'))
+        record = json.loads(record)
         last_known = r.hget('LastKnown', record['patientId'])
-        last_known = ast.literal_eval(last_known.decode('ascii'))
+        last_known = json.loads(last_known)
 
         all_expired_measures = ''
         # Iterate over all measures I need to check the receiving data about them.
