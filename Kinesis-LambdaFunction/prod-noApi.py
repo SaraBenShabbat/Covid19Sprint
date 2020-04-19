@@ -24,6 +24,7 @@ def is_db_failed(event) -> bool:
     sample_unitId  = json.loads(base64.b64decode(sample_unitId[0]['data']))['unitId']
 
     if(redis_mapping.exists(sample_unitId) != 1):
+        print('11')
         return True
     return False
     
@@ -39,24 +40,27 @@ def is_redis_available() -> bool:
 
 def lambda_handler(event, context):
     output = []
+    is_redis_avail = is_redis_available() 
 
+    # If the db failed, recreate mapping table.
+    if(is_db_failed(event) == True):
+        recreate_mapping()
+    
+    # Redis connection
+    r = redis.StrictRedis(host=elasticache_endpoint, port=6379, db=0,charset="utf-8", decode_responses=True)
+    
     for record in event['records']:
         # Decoding, because we get the date encoded to base64.
         payload = base64.b64decode(record['data'])
         dt = json.loads(payload)
         
-        if(is_redis_available() == True):
-            # Redis connection
-            r = redis.StrictRedis(host=elasticache_endpoint, port=6379, db=0,charset="utf-8", decode_responses=True)
-
-            # If the db failed, recreate mapping table.
-            if(is_db_failed(event) == True):
-                recreate_mapping()
-            
+        if(is_redis_avail == True):
             patient_id = get_patient_id(dt['unitId'])
+            
             # Retrieving the record belongs to the current patient id, from redis.
             current_known = r.hget('LastKnown', patient_id)
             current_update = r.hget('last_update', patient_id)
+            
             if(current_known == None):
                 r.hset('LastKnown', patient_id, json.dumps({'patientId': patient_id, 'age': dt['age'], 'primery_priority': {},'secondery_priority': {}}))
                 current_known = r.hget('LastKnown', patient_id)
