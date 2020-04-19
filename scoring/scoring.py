@@ -4,8 +4,6 @@ import redis
 import ast
 from elasticsearch import Elasticsearch
 import time
-from datetime import datetime, timezone
-from dateutil.parser import parse
 import pandas as pd
 import numpy as np
 
@@ -15,23 +13,13 @@ es = Elasticsearch(
     hosts=host,
 )
 es.ping()
-doc = {
-    'size': 10000,
-    'query': {
-        'match_all': {}
-    }
-}
-source_to_update = {
-    "doc": {
-        "_score": 2.0
-    }
-}
 
 # Redis connection.
 elasticache_endpoint = "cv19redis-001.d9jy7a.0001.euw1.cache.amazonaws.com"
 r = redis.StrictRedis(host=elasticache_endpoint, port=6379, db=0)
 
-ms_utc = int(datetime.utcnow().timestamp() * 1000)
+# Nano seconds from epoch. (- same format is used in kinesis.)
+ns_epoch = time.time_ns() // 1000000
 
 # Create df's that represent the measure values and severity.
 df_breath = pd.DataFrame({'min': {0: 0, 1: 9, 2: 12, 3: 21, 4: 25},
@@ -64,24 +52,12 @@ df_names = [df_breath, df_pso2, df_BloodPressure, df_BPM, df_fever]
 df_names_low = [df_breath_high_fever, df_pso2, df_BloodPressure_high_fever, df_BPM_high_fever, df_fever]
 measure_names = ['breath_rate', 'saturation', 'blood_pressure_h', 'bpm', 'fever']
 score_record_names = ['BreathRate', 'SpO2', 'BloodPressure', 'BPM', 'Fever']
+expired_event = [False] * len(r.hvals('last_update'))
 
 
-def get_prev_score(patient_id: str):
-    my_list = []
-    res = es.search(index='patient_status')
-    for item in res['hits']['hits']:
-        if (item['_source']['PatientID'] == patient_id):
-            my_list.append(item['_source'])
-    # Check if the current patient - has no prev records.
-    if (my_list == []):
-        return None
-
-    data_sorted = sorted(my_list, key=lambda item: int(item['Timestamp']))
-
-    return data_sorted[len(data_sorted) - 1]['Score']['Total']
 
 
-def score_alert(prev_score, score_record):
+def score_alert(prev_score, score_record, cnt):
     current_score = score_record['Score']['Total']
     desc = ''
     severity = 0
@@ -102,7 +78,26 @@ def score_alert(prev_score, score_record):
             severity = 0
 
     if(desc != ''):
-        es.index(index='patient_event', id=score_record['Id'], body={'PtientId': score_record['PatientID'], 'Timestamp': score_record['Timestamp'], 'Event': desc, 'Severity': severity})
+        # If this id has been used in this index for expired event (- for the current patient.), modifying the id in a pre defined way for having a relation between the id's.
+        # No way to have a generated id same as new_id, as I increase the id over the maximal char length.
+        new_id = score_record['Id'] if expired_event[cnt] == False else score_record['Id'] + '012345'
+        es.index(index='patient_event', id=new_id, body={'PatientId': score_record['PatientID'], 'Timestamp': score_record['Timestamp'], 'Event': desc, 'Severity': severity})
+
+
+def get_prev_score(patient_id: str):
+    my_list = []
+    res = es.search(index='patient_status', size=10000)
+
+    for item in res['hits']['hits']:
+        if (item['_source']['PatientID'] == patient_id):
+            my_list.append(item['_source'])
+
+    # Check if the current patient - has no prev records.
+    if (my_list == []):
+        return None
+
+    data_sorted = sorted(my_list, key=lambda item: int(item['Timestamp']))
+    return data_sorted[len(data_sorted) - 1]['Score']['Total']
 
 
 def scoring_measure(df_in_use, priority_names, i):
@@ -134,24 +129,30 @@ def es_no_cache():
     es.indices.refresh(index="patient_event")
 
 
-def update_expired_measure(id: str, patient_id:str, measure:str):
-    # Removing the expired measure from 'LastKnown' index.
-    current_patinet = r.hget('LastKnown', patient_id)
-    current_patinet = ast.literal_eval(current_patinet.decode('ascii'))
-    if(measure == 'breath_rate' or measure =='wheezing'):
-        current_patinet['primery_priority'].pop(measure)
-    else:
-        current_patinet['secondery_priority'].pop(measure)
-    r.hset('LastKnown', patient_id, str(current_patinet))
+def expired_alert(id: str, patient_id:str, all_expired_measures: str):
+    all_expired_measures = all_expired_measures[:len(all_expired_measures) - 2]
+    es.index(index='patient_event', id=id, body={'PatientId': patient_id, 'Timestamp': ns_epoch,
+                                                 'Event': 'Over 12 hours without receiving new information about ' + all_expired_measures + '.',
+                                                 'Severity': 1})
 
-    # Issue a message to ES.
-    es.index(index='patient_event', id=id, body={'PatientID': patient_id, 'Timestamp': ms_utc, 'Event': 'Over 12 hours without receiving new information about ' + measure + ' .', 'Severity': 1})
+
+def update_expired_measure(patient_id: str, measure: str)-> str:
+    # Removing the expired measure from 'LastKnown' index.
+    current_patient = r.hget('LastKnown', patient_id)
+    current_patient = ast.literal_eval(current_patient.decode('ascii'))
+    if(measure == 'breath_rate' or measure =='wheezing'):
+        current_patient['primery_priority'].pop(measure)
+    else:
+        current_patient['secondery_priority'].pop(measure)
+    r.hset('LastKnown', patient_id, str(current_patient))
+
+    return measure + ', '
 
 
 def get_expired_status(measure_datetime) -> bool:
     # A function gets the last datetime a measure was measures, and check if the measure has been expired.
-    measure_datetime = int('1495072949453')
-    diff = (ms_utc - measure_datetime)/3600000
+    diff = (ns_epoch - int(measure_datetime)) / 3600000
+
     if(diff >= 12):
         return True
     return False
@@ -159,13 +160,19 @@ def get_expired_status(measure_datetime) -> bool:
 
 def check_expired():
     measure_check = measure_names + ['wheezing']
-    for record in r.hvals('last_update'):
+
+    # Counter for patients with a 'patinet_event' record for expired measure. (- as this and also scoring status have to use the same id.)
+    cnt = 0
+
+    last_update_records = r.hvals('last_update')
+    for record in last_update_records:
         # Get the records belong to the current patient_id from 'last_update' and 'LastKnown' redis indexes.
         record = ast.literal_eval(record.decode('ascii'))
         record = ast.literal_eval(r.hget('last_update', record['patientId']).decode('ascii'))
         last_known = r.hget('LastKnown', record['patientId'])
         last_known = ast.literal_eval(last_known.decode('ascii'))
 
+        all_expired_measures = ''
         # Iterate over all measures I need to check the receiving data about them.
         for measure in measure_check:
             # Checks whether the measure has ever been measured for the current patient
@@ -175,15 +182,23 @@ def check_expired():
                 if (measure == 'breath_rate' or measure == 'wheezing'):
                     if(measure in  last_known['primery_priority']):
                         if(get_expired_status(record['updates'][measure]) == True):
-                            update_expired_measure(record['Id'],  record['patientId'],  measure)
+                            all_expired_measures = all_expired_measures + update_expired_measure(record['patientId'],  measure)
                 elif (measure in last_known['secondery_priority']):
                     if(get_expired_status(record['updates'][measure]) == True):
-                        update_expired_measure(record['Id'], record['patientId'], measure)
+                        all_expired_measures = all_expired_measures + update_expired_measure(record['patientId'], measure)
+
+        # If any of the measure is expired, issue a message to ES.
+        if(all_expired_measures != ''):
+            expired_alert(record['Id'],  record['patientId'],  all_expired_measures)
+            expired_event[cnt] = True
+
+        cnt = cnt + 1
 
 
 def main_func():
     check_expired()
 
+    cnt = 0
     # Getting the data from 'LastKnown' index in redis.
     records = r.hvals("LastKnown")
 
@@ -245,10 +260,12 @@ def main_func():
         # Get previous score for the current patient, and if necessary - issue an appropriate message. (- It should work fine.)
         prev_score = get_prev_score(score_record['PatientID'])
         if(prev_score != None):
-              score_alert(prev_score, score_record)
+              score_alert(prev_score, score_record, cnt)
 
         # Writing the document to ES.
-        es.index(index='patient_status', id=score_record['Id'], body=score_record)
+        res = es.index(index='patient_status', id=score_record['Id'], body=score_record)
+
+        cnt = cnt + 1
 
 
 

@@ -5,6 +5,7 @@ import ast
 import os
 import uuid
 from datetime import datetime
+import time
 import json
 
 def get_patient_id(sensor_id: str) -> str:
@@ -49,16 +50,17 @@ def lambda_handler(event, context):
         primery_priority = dt['primery_priority']
         secondery_priority = dt['secondery_priority']
         
-        # Update exis measues - both values and both timestamp.
-        current_known['timeTag'] = record['approximateArrivalTimestamp']
+        # Update exis measures - both values and both timestamp.
+        ns_epoch = int(time.time_ns() // 1000000)
+        current_known['timeTag'] = ns_epoch
         if (dt['age'] != current_known['age']):
             current_known['age'] = dt['age']
         for key, val in primery_priority.items():
             current_known['primery_priority'][key] = val
-            current_update['updates'][key] = record['approximateArrivalTimestamp']
+            current_update['updates'][key] = ns_epoch
         for key, val in secondery_priority.items():
             current_known['secondery_priority'][key] = val
-            current_update['updates'][key] = record['approximateArrivalTimestamp']
+            current_update['updates'][key] = ns_epoch
             
         r.hset('LastKnown', patient_id, str(current_known))
         r.hset('last_update', patient_id, str(current_update))
@@ -70,4 +72,3 @@ def lambda_handler(event, context):
         }
         output.append(output_record)  
         return {'records': output}
-        
